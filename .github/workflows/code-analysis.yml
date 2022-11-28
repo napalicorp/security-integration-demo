@@ -1,0 +1,163 @@
+name: Code Analysis
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '0 11 * * *'
+jobs:
+  secretscan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Install GitLeaks
+        run: |
+          wget https://github.com/zricethezav/gitleaks/releases/download/v8.15.0/gitleaks_8.15.0_linux_x64.tar.gz
+          tar -xzvf gitleaks_8.15.0_linux_x64.tar.gz
+          cp gitleaks /usr/local/bin/
+      - name: Run GitLeaks
+        run: |
+          ls -lah ${GITHUB_WORKSPACE}
+          gitleaks detect --source ${GITHUB_WORKSPACE}/src --no-git -v -l trace -f sarif -r ${{github.workspace}}/gitleaks-results.sarif
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@master
+        with:
+           name: GitLeaks Report
+           path: ${{github.workspace}}/gitleaks-results.*
+  dependencyscan:
+    name: Dependency Scan
+    needs: secretscan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Install OWASP Dependency Check
+        shell: bash
+        run: |
+          DEPENDENCY_CHECK=7.3.0
+          /usr/bin/wget -q -O /opt/dependency-check-${DEPENDENCY_CHECK}-release.zip https://github.com/jeremylong/DependencyCheck/releases/download/v${DEPENDENCY_CHECK}/dependency-check-${DEPENDENCY_CHECK}-release.zip && \
+          /usr/bin/wget -q -O /opt/dependency-check-${DEPENDENCY_CHECK}-release.zip.asc https://github.com/jeremylong/DependencyCheck/releases/download/v${DEPENDENCY_CHECK}/dependency-check-${DEPENDENCY_CHECK}-release.zip.asc && \
+          /usr/bin/gpg --batch --keyserver keyserver.ubuntu.com --recv-keys 259A55407DD6C00299E6607EFFDE55BE73A2D1ED && \
+          /usr/bin/gpg --batch --verify /opt/dependency-check-${DEPENDENCY_CHECK}-release.zip.asc /opt/dependency-check-${DEPENDENCY_CHECK}-release.zip && \
+          /usr/bin/unzip /opt/dependency-check-${DEPENDENCY_CHECK}-release.zip -d /opt && \
+          /bin/mkdir /opt/dependency-check/data && \
+          /bin/chmod g+w -R /opt/dependency-check/data
+      - name: Cache OWASP Dep Check Vuln Database
+        uses: actions/cache@v1
+        with:
+          path: /opt/dependency-check/data
+          key: ${{ runner.os }}-depcheckdata
+          restore-keys: ${{ runner.os }}-depcheckdata
+      - name: Run OWASP Dep Check
+        run: |
+          /opt/dependency-check/bin/dependency-check.sh -f JSON -f HTML -f SARIF -s ${GITHUB_WORKSPACE}/src -o ${GITHUB_WORKSPACE} --disableAssembly --failOnCVSS 4 --enableRetired
+      - name: Extract Dep Check Results
+        id: extract_depcheck_results
+        if: always()
+        run: |
+          VULNERABILITIES=$(cat ${GITHUB_WORKSPACE}/dependency-check-report.sarif | jq '.runs[0].results[].message.text')
+          echo "vulnerabilities=$(echo $VULNERABILITIES)" >> $GITHUB_OUTPUT
+          echo "DEPCHECKVULNS=$VULNERABILITIES" >> "$GITHUB_ENV"
+      - name: Post Dep Check Results to PR
+        if: always() && steps.extract_depcheck_results.outputs.vulnerabilities
+        uses: thollander/actions-comment-pull-request@v1
+        with:
+          message: |
+            # Vulnerabilities found in the dependencies  
+            ${{ steps.extract_depcheck_results.outputs.vulnerabilities }}
+          comment_includes: 'dependencies'
+          reactions: eyes
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@master
+        with:
+           name: Depcheck Report
+           path: ${{github.workspace}}/dependency-check-report.*
+  codescan:
+    name: Code Scan
+    needs: dependencyscan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Set up JDK 11
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.11
+      - name: Cache SonarQube packages
+        uses: actions/cache@v1
+        with:
+          path: ~/sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Cache SonarQube scanner
+        id: cache-sonar-scanner
+        uses: actions/cache@v1
+        with:
+          path: .\.sonar\scanner
+          key: ${{ runner.os }}-sonar-scanner
+          restore-keys: ${{ runner.os }}-sonar-scanner
+      - name: Install Horusec Scanner
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash -s latest
+      - name: Install Checkov Scanner
+        shell: bash
+        run: |
+          pip3 install checkov
+      - name: Install SonarQube scanner
+        if: steps.cache-sonar-scanner.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -Path .sonar/scanner -ItemType Directory
+          dotnet tool update dotnet-sonarscanner --tool-path .sonar/scanner
+      - name: Install dotnet-coverage tool
+        run: |
+          dotnet tool install --global dotnet-coverage
+      - name: Download Secret Scanning Results
+        uses: actions/download-artifact@v3
+        with:
+          name: GitLeaks Report
+      - name: Download DepCheck Results
+        uses: actions/download-artifact@v3
+        with:
+          name: Depcheck Report
+      - name: Build and analyze
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ./.sonar/scanner/dotnet-sonarscanner begin \
+          /k:"amalabey_security-integrated-ga_AYSdzyD_4R0R_Ejl5wBt" \
+          /d:sonar.verbose=true \
+          /d:sonar.projectBaseDir=${GITHUB_WORKSPACE} \
+          /d:sonar.cs.vscoveragexml.reportsPaths=coverage.xml \
+          /d:sonar.dependencyCheck.jsonReportPath="${GITHUB_WORKSPACE}/dependency-check-report.json" \
+          /d:sonar.dependencyCheck.htmlReportPath="${GITHUB_WORKSPACE}/dependency-check-report.html" \
+          /d:sonar.sarif.path=horusec-results.sarif,gitleaks-results.sarif,${GITHUB_WORKSPACE}/src/results_sarif.sarif \
+          /d:sonar.login="${{ secrets.SONAR_TOKEN }}" \
+          /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}"
+          dotnet build
+          dotnet-coverage collect 'dotnet test' -f xml  -o 'coverage.xml'
+          horusec start -D -p . -P . --config-file-path=horusec-config.json -o="sarif" -O="horusec-results.sarif" --log-level=debug || :
+          checkov -d ${GITHUB_WORKSPACE}/src -o sarif --output-file-path=${GITHUB_WORKSPACE}/src || :
+          ./.sonar/scanner/dotnet-sonarscanner end /d:sonar.login="${{ secrets.SONAR_TOKEN }}"
+      - name: SonarQube Quality Gate Check
+        uses: SonarSource/sonarqube-quality-gate-action@15767f0e4eb489cfdd989dc717fa78c038d0de8a
+        env:
+         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }} #OPTIONAL
+        with:
+          # Location of the scanner metadata report file
+          scanMetadataReportFile: .sonarqube/out/.sonar/report-task.txt
