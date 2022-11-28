@@ -1,8 +1,6 @@
 {
   "IsEncrypted": false,
   "Values": {
-    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
-    "finhub_api_baseUrl": "https://api.finhub.com",
-    "finhub_api_token": "joiOEb45QLanNokJ0Ja4RXGsw86YDl1"
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated"
   }
 }
