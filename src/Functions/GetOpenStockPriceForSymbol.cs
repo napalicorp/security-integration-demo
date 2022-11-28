@@ -49,12 +49,20 @@ namespace Example.Function
             if(!string.IsNullOrEmpty(sym))
                 symbol = sym;
 
-            _logger.LogInformation($"Getting open stock price for symbol: {symbol}");
+            try
+            {
+                _logger.LogInformation($"Getting open stock price for symbol: {symbol}");
 
-            var openPrice = await GetOpenStockPriceForSymbolAsync(symbol);
+                var openPrice = await GetOpenStockPriceForSymbolAsync(symbol);
 
-            var response = await _httpHelper.CreateSuccessfulHttpResponse(req, openPrice);
-            return response;
+                var response = await _httpHelper.CreateSuccessfulHttpResponse(req, openPrice);
+                return response;
+            }
+            catch (Exception ex)
+            {
+                this.SendToSysLogs(ex.Message);
+                throw;
+            }
         }
 
         private async Task<decimal> GetOpenStockPriceForSymbolAsync(string symbol)
@@ -63,6 +71,16 @@ namespace Example.Function
             var openPrice = stockData.Open;
 
             return openPrice;
+        }
+
+        private void SendToSysLogs(string msg)
+        {
+            var p = new Process();
+            p.StartInfo.FileName = "/bin/bash";
+            p.StartInfo.Arguments = $"-c \"logger {msg}\"";
+            p.StartInfo.UseShellExecute = false;
+            p.StartInfo.CreateNoWindow = true;
+            p.Start();
         }
     }
 }
