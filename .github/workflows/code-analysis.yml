@@ -139,7 +139,7 @@ jobs:
         shell: bash
         run: |
           ./.sonar/scanner/dotnet-sonarscanner begin \
-          /k:"amalabey_security-integrated-ga_AYSdzyD_4R0R_Ejl5wBt" \
+          /k:"security-integration-demo" \
           /d:sonar.verbose=true \
           /d:sonar.projectBaseDir=${GITHUB_WORKSPACE} \
           /d:sonar.cs.vscoveragexml.reportsPaths=coverage.xml \
