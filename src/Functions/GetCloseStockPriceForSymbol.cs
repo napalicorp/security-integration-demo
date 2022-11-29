@@ -49,7 +49,9 @@ namespace Example.Function
 
             _logger.LogInformation($"Getting previous close stock price for symbol: {symbol}");
 
-            decimal closePrice = await GetCloseStockPriceForSymbolAsync(symbol);
+            decimal closePrice = await GetStokPriceFromLocalCache(symbol);
+            if (closePrice == 0)
+                closePrice = await GetCloseStockPriceForSymbolAsync(symbol);
 
             var response = await _httpHelper.CreateSuccessfulHttpResponse(reqData, closePrice);
             return response;
@@ -61,6 +63,20 @@ namespace Example.Function
             var closePrice = stockData.PreviousClose;
 
             return closePrice;
+        }
+
+        private async Task<decimal> GetStokPriceFromLocalCache(string symbol)
+        {
+            string cs = "Data Source=cache.sqlite";
+            string stm = "SELECT price FROM open_stock_price WHERE symbol='" + symbol + "'";
+            using var con = new SQLiteConnection(cs);
+            con.Open();
+            using var cmd = new SQLiteCommand(stm, con);
+            var price = cmd.ExecuteScalar();
+            if (price != null)
+                return await Task.FromResult((decimal)price);
+
+            return 0;
         }
     }
 }
